@@ -9,8 +9,9 @@ Write-Host ""
 Write-Host "このツールは以下を自動設定します。"
 Write-Host "  1. Claude Code CLI のインストール"
 Write-Host "  2. マイク(音声入力)・応答の日本語化"
-Write-Host "  3. ファイル削除前の確認ルールの追加"
-Write-Host "  4. CLAUDE.md への言語設定の追加"
+Write-Host "  3. ファイル削除・commit・push・mergeなど、元に戻しにくい操作、あるいは"
+Write-Host "     元に戻せない操作の確認ルールの追加"
+Write-Host "  4. CLAUDE.md への言語設定・上記項目3の確認ルールの追加"
 Write-Host ""
 Write-Host "すでに設定済みの項目は自動でスキップされます。" -ForegroundColor DarkGray
 Write-Host ""
@@ -75,7 +76,7 @@ $settings["language"] = "japanese"
 Write-Host "  -> マイク(音声入力)・応答の言語を日本語に設定しました。"
 
 Write-Host ""
-Write-Host "[3/4] ファイル削除前の確認ルールを追加しています..." -ForegroundColor Cyan
+Write-Host "[3/4] 元に戻しにくい・元に戻せない操作(削除・commit・push等)の確認ルールを追加しています..." -ForegroundColor Cyan
 
 $deleteAskRules = @(
     "Bash(rm *)",
@@ -83,12 +84,30 @@ $deleteAskRules = @(
     "Bash(unlink *)",
     "Bash(git rm *)",
     "Bash(git clean *)",
+    "Bash(git commit *)",
+    "Bash(git push *)",
+    "Bash(git rebase *)",
+    "Bash(git merge *)",
+    "Bash(git branch -D *)",
+    "Bash(git reset --hard*)",
+    "Bash(git stash drop*)",
+    "Bash(git stash clear*)",
+    "Bash(git remote set-url*)",
     "PowerShell(Remove-Item *)",
     "PowerShell(ri *)",
     "PowerShell(rm *)",
     "PowerShell(rmdir *)",
     "PowerShell(del *)",
-    "PowerShell(erase *)"
+    "PowerShell(erase *)",
+    "PowerShell(git commit *)",
+    "PowerShell(git push *)",
+    "PowerShell(git rebase *)",
+    "PowerShell(git merge *)",
+    "PowerShell(git branch -D *)",
+    "PowerShell(git reset --hard*)",
+    "PowerShell(git stash drop*)",
+    "PowerShell(git stash clear*)",
+    "PowerShell(git remote set-url*)"
 )
 
 $permissions = [ordered]@{}
@@ -117,12 +136,12 @@ $settings["permissions"] = $permissions
 $json = $settings | ConvertTo-Json -Depth 10
 [System.IO.File]::WriteAllText($settingsPath, $json, [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "  -> 削除コマンド実行前に確認を求める設定を追加しました。"
+Write-Host "  -> 削除・commit・push・rebase・merge等の実行前に確認を求める設定を追加しました。"
 Write-Host ""
 Write-Host "設定ファイルの場所: $settingsPath"
 
 Write-Host ""
-Write-Host "[4/4] CLAUDE.md の言語設定を確認しています..." -ForegroundColor Cyan
+Write-Host "[4/4] CLAUDE.md の言語設定・元に戻しにくい操作の確認ルールを確認しています..." -ForegroundColor Cyan
 
 $claudeMdPath = Join-Path $claudeDir "CLAUDE.md"
 
@@ -141,19 +160,77 @@ $languageSettingsBlock = @'
 - 英語表現が混ざった場合は、その場で日本語に言い換えて説明し直す
 '@
 
+$destructiveOpsBlock = @'
+## 元に戻しにくい・元に戻せない操作の確認ルール
+
+以下の操作を実行する前は、必ずユーザーに確認を取ること。
+確認なしで実行してはいけない。
+
+### ファイル・ディレクトリ
+- ファイル/ディレクトリの削除
+- `git clean -fd`(untrackedファイルの一括削除)
+
+### Git操作
+- `git commit`
+- `git push`
+- `git push --force` / `--force-with-lease`
+- `git rebase`
+- `git branch -D`(ブランチの強制削除)
+- `git merge`(特にmain/masterブランチへのマージ)
+- `git reset --hard`
+- `git stash drop` / `git stash clear`
+- リポジトリの削除(`.git`ディレクトリの削除、GitHub上でのリポジトリ削除操作)
+- `git remote set-url`などリモート設定の変更
+
+### データベース操作
+- `DROP TABLE` / `DROP DATABASE`
+- `TRUNCATE`
+- `WHERE`句のない`DELETE` / `UPDATE`
+- マイグレーションの実行(スキーマ変更を伴う場合は特に注意)
+
+### 確認時のフォーマット
+実行前に、以下を明示してから確認を取ること:
+1. これから実行するコマンド(全文)
+2. その操作が何を変更・削除するか(対象ファイル/テーブル/ブランチ名など具体的に)
+3. 取り消せるか、取り消せないか
+
+ユーザーが明確に「はい」「OK」「実行して」等の同意を示すまで、実行してはいけない。
+'@
+
+$existingMd = ""
 if (Test-Path $claudeMdPath) {
     $existingMd = Get-Content -Path $claudeMdPath -Raw -Encoding UTF8
     if (-not $existingMd) { $existingMd = "" }
-    if ($existingMd.Contains("# 言語設定")) {
-        Write-Host "  -> 既に言語設定が含まれています。スキップします。"
-    } else {
-        $mergedMd = $existingMd.TrimEnd() + "`r`n`r`n" + $languageSettingsBlock
-        [System.IO.File]::WriteAllText($claudeMdPath, $mergedMd, [System.Text.UTF8Encoding]::new($false))
-        Write-Host "  -> 既存のCLAUDE.mdに言語設定を追記しました。"
-    }
+}
+
+$blocksToAdd = @()
+if ($existingMd.Contains("# 言語設定")) {
+    Write-Host "  -> 言語設定は既に含まれています。スキップします。"
 } else {
-    [System.IO.File]::WriteAllText($claudeMdPath, $languageSettingsBlock, [System.Text.UTF8Encoding]::new($false))
-    Write-Host "  -> CLAUDE.mdを新規作成し、言語設定を追加しました。"
+    $blocksToAdd += $languageSettingsBlock
+    Write-Host "  -> 言語設定を追加します。"
+}
+
+if ($existingMd.Contains("## 元に戻しにくい・元に戻せない操作の確認ルール")) {
+    Write-Host "  -> 元に戻しにくい・元に戻せない操作の確認ルールは既に含まれています。スキップします。"
+} else {
+    $blocksToAdd += $destructiveOpsBlock
+    Write-Host "  -> 元に戻しにくい・元に戻せない操作の確認ルールを追加します。"
+}
+
+if ($blocksToAdd.Count -gt 0) {
+    $newContent = $existingMd
+    foreach ($block in $blocksToAdd) {
+        if ($newContent.Trim().Length -eq 0) {
+            $newContent = $block
+        } else {
+            $newContent = $newContent.TrimEnd() + "`r`n`r`n" + $block
+        }
+    }
+    [System.IO.File]::WriteAllText($claudeMdPath, $newContent, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "  -> CLAUDE.mdを更新しました。"
+} else {
+    Write-Host "  -> CLAUDE.mdは変更ありません。"
 }
 
 Write-Host ""
