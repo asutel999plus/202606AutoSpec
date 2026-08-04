@@ -1,0 +1,4 @@
+# AutoSpec 実行時生成物(Setup.bat/_internal.ps1/hookが動作時に作成するファイル)
+ClaudeCodeSetup/.autospec_mode
+ClaudeCodeSetup/autospec_action_log.md
+ClaudeCodeSetup/.claude/hooks/.session_created_files/

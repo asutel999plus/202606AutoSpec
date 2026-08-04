@@ -1,29 +1,139 @@
 ﻿[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
-Write-Host ""
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Claude Code 初期セットアップ" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "このツールは以下を自動設定します。"
-Write-Host "  1. Claude Code CLI のインストール"
-Write-Host "  2. マイク(音声入力)・応答の日本語化"
-Write-Host "  3. ファイル削除・commit・push・mergeなど、元に戻しにくい操作、あるいは"
-Write-Host "     元に戻せない操作の確認ルールの追加"
-Write-Host "  4. CLAUDE.md への言語設定・上記項目3の確認ルールの追加"
-Write-Host ""
-Write-Host "すでに設定済みの項目は自動でスキップされます。" -ForegroundColor DarkGray
-Write-Host ""
-Write-Host "前提条件:"
-Write-Host "  - Visual Studio Code がインストール済みであること"
-Write-Host "  - Claude Pro / Max / Team いずれかのプランを契約していること"
-Write-Host "  - インターネットに接続されていること"
-Write-Host ""
-Read-Host "続行する場合は Enter キーを押してください(中止する場合はウィンドウを閉じてください)"
+# ============================================================
+# 動作モード選択メニュー
+#   矢印キー(↑↓)+Enter、または数字キー(1/2/3)のどちらでも選択可能
+#   (関数定義のみ。呼び出しは[1/5]ステップで行う)
+# ============================================================
+function Show-AutoSpecModeMenu {
+    $options = @(
+        [ordered]@{ Key = "1"; Value = "safety";              Label = "Safetyモード（既存の確認プロンプト方式・デフォルト）" },
+        [ordered]@{ Key = "2"; Value = "auto_until_complete";  Label = "仕様書生成完了までAutoモード（完了時に自動でSafetyへ復帰・夜間放置向け）" },
+        [ordered]@{ Key = "3"; Value = "auto";                 Label = "Autoモード（手動でSafetyモードに戻すまで継続）" }
+    )
+
+    function Write-MenuScreen {
+        param([int]$SelectedIndex)
+        # 全角文字を含む行はコンソール幅で自動折り返しされる場合があり、
+        # SetCursorPositionによる差分更新では折り返し後の行位置を正しく
+        # 算出できない。そのため、選択が変わるたびに画面全体(ツールの説明を含む)
+        # を再描画する。
+        try { Clear-Host } catch { }
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host "  Claude Code 初期セットアップ" -ForegroundColor Cyan
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host ""
+        Write-Host "このツールは以下を自動設定します。"
+        Write-Host "  1. 動作モード(Safety/Auto)の選択とAutoモード用の権限フック設定"
+        Write-Host "  2. Claude Code CLI のインストール"
+        Write-Host "  3. マイク(音声入力)・応答の日本語化"
+        Write-Host "  4. ファイル削除・commit・push・mergeなど、元に戻しにくい操作、あるいは"
+        Write-Host "     元に戻せない操作の確認ルールの追加"
+        Write-Host "  5. CLAUDE.md への言語設定・上記項目4の確認ルールの追加"
+        Write-Host ""
+        Write-Host "すでに設定済みの項目は自動でスキップされます。" -ForegroundColor DarkGray
+        Write-Host ""
+        Write-Host "前提条件:"
+        Write-Host "  - Visual Studio Code がインストール済みであること"
+        Write-Host "  - Claude Pro / Max / Team いずれかのプランを契約していること"
+        Write-Host "  - インターネットに接続されていること"
+        Write-Host ""
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host "  動作モードを選択してください" -ForegroundColor Cyan
+        Write-Host "========================================" -ForegroundColor Cyan
+        Write-Host "  (↑↓キー+Enter、または数字キー 1/2/3 で選択できます)" -ForegroundColor DarkGray
+        Write-Host "  (Enterキーでこのままセットアップを続行します。中止する場合はウィンドウを閉じてください)" -ForegroundColor DarkGray
+        Write-Host ""
+        for ($i = 0; $i -lt $options.Count; $i++) {
+            $line = " $($options[$i].Key). $($options[$i].Label)"
+            if ($i -eq $SelectedIndex) {
+                Write-Host ("> " + $line.Substring(1)) -ForegroundColor Yellow
+            } else {
+                Write-Host ("  " + $line.Substring(1))
+            }
+        }
+    }
+
+    $selectedIndex = 0
+    $canReadKey = $true
+    try {
+        $null = $host.UI.RawUI.KeyAvailable
+    } catch {
+        $canReadKey = $false
+    }
+
+    if (-not $canReadKey) {
+        # ReadKeyが使えない実行環境向けのフォールバック(数字入力のみ)
+        Write-MenuScreen -SelectedIndex $selectedIndex
+        while ($true) {
+            $answer = Read-Host "番号を入力してください(1/2/3、中止する場合はウィンドウを閉じてください)"
+            if (-not $answer) { return $options[0].Value }
+            $found = $options | Where-Object { $_.Key -eq $answer.Trim() }
+            if ($found) { return $found.Value }
+            Write-Host "  -> 1、2、3のいずれかを入力してください。" -ForegroundColor Red
+        }
+    }
+
+    Write-MenuScreen -SelectedIndex $selectedIndex
+
+    while ($true) {
+        $key = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
+        switch ($key.VirtualKeyCode) {
+            38 { # Up arrow
+                $selectedIndex = ($selectedIndex - 1 + $options.Count) % $options.Count
+                Write-MenuScreen -SelectedIndex $selectedIndex
+            }
+            40 { # Down arrow
+                $selectedIndex = ($selectedIndex + 1) % $options.Count
+                Write-MenuScreen -SelectedIndex $selectedIndex
+            }
+            13 { # Enter
+                return $options[$selectedIndex].Value
+            }
+            default {
+                $found = $options | Where-Object { $_.Key -eq $key.Character.ToString() }
+                if ($found) { return $found.Value }
+            }
+        }
+    }
+}
+
+function Set-AutoSpecMode {
+    param([string]$Mode)
+    $modePath = Join-Path $PSScriptRoot ".autospec_mode"
+    [System.IO.File]::WriteAllText($modePath, $Mode, [System.Text.UTF8Encoding]::new($false))
+    return $modePath
+}
+
+$selectedMode = Show-AutoSpecModeMenu
+$modeLabelMap = @{
+    "safety"              = "Safetyモード"
+    "auto_until_complete" = "仕様書生成完了までAutoモード"
+    "auto"                = "Autoモード"
+}
+$modeFilePath = Set-AutoSpecMode -Mode $selectedMode
 
 Write-Host ""
-Write-Host "[1/4] Claude Code CLI を確認しています..." -ForegroundColor Cyan
+Write-Host "[1/5] 動作モードを選択しました。" -ForegroundColor Cyan
+Write-Host "  -> 選択されたモード: $($modeLabelMap[$selectedMode])" -ForegroundColor Green
+Write-Host "  -> $modeFilePath に記録しました。"
+if ($selectedMode -ne "safety") {
+    Write-Host "  -> Autoモードでは、git/svn管理下のファイルおよびこのセッションで新規作成した" -ForegroundColor DarkGray
+    Write-Host "     ファイルの編集・削除は自動で許可されます(git/svnの状態を変更する操作は常に禁止)。" -ForegroundColor DarkGray
+}
+
+$hookSettingsPath = Join-Path $PSScriptRoot ".claude\settings.json"
+$hookScriptPath = Join-Path $PSScriptRoot ".claude\hooks\autospec_guard.ps1"
+if ((Test-Path $hookSettingsPath) -and (Test-Path $hookScriptPath)) {
+    Write-Host "  -> Autoモード用の権限フック設定を確認しました。"
+} else {
+    Write-Host "  -> Autoモード用の権限フック設定が見つかりません。ZIPの展開が正しく行われているか確認してください。" -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "[2/5] Claude Code CLI を確認しています..." -ForegroundColor Cyan
 
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Host "  -> 既にインストールされています。スキップします。"
@@ -52,7 +162,7 @@ if (Test-Path $localBin) {
 }
 
 Write-Host ""
-Write-Host "[2/4] ユーザー設定(settings.json)を確認しています..." -ForegroundColor Cyan
+Write-Host "[3/5] ユーザー設定(settings.json)を確認しています..." -ForegroundColor Cyan
 
 $claudeDir = Join-Path $HOME ".claude"
 if (-not (Test-Path $claudeDir)) {
@@ -76,7 +186,7 @@ $settings["language"] = "japanese"
 Write-Host "  -> マイク(音声入力)・応答の言語を日本語に設定しました。"
 
 Write-Host ""
-Write-Host "[3/4] 元に戻しにくい・元に戻せない操作(削除・commit・push等)の確認ルールを追加しています..." -ForegroundColor Cyan
+Write-Host "[4/5] 元に戻しにくい・元に戻せない操作(削除・commit・push等)の確認ルールを追加しています..." -ForegroundColor Cyan
 
 $deleteAskRules = @(
     "Bash(rm *)",
@@ -141,7 +251,7 @@ Write-Host ""
 Write-Host "設定ファイルの場所: $settingsPath"
 
 Write-Host ""
-Write-Host "[4/4] CLAUDE.md の言語設定・元に戻しにくい操作の確認ルールを確認しています..." -ForegroundColor Cyan
+Write-Host "[5/5] CLAUDE.md の言語設定・元に戻しにくい操作の確認ルールを確認しています..." -ForegroundColor Cyan
 
 $claudeMdPath = Join-Path $claudeDir "CLAUDE.md"
 
