@@ -182,8 +182,13 @@ if (Test-Path $settingsPath) {
     }
 }
 
+$languageChanged = ($settings["language"] -ne "japanese")
 $settings["language"] = "japanese"
-Write-Host "  -> マイク(音声入力)・応答の言語を日本語に設定しました。"
+if ($languageChanged) {
+    Write-Host "  -> マイク(音声入力)・応答の言語を日本語に設定しました。"
+} else {
+    Write-Host "  -> マイク(音声入力)・応答の言語は既に日本語に設定されています。"
+}
 
 Write-Host ""
 Write-Host "[4/5] 元に戻しにくい・元に戻せない操作(削除・commit・push等)の確認ルールを追加しています..." -ForegroundColor Cyan
@@ -235,18 +240,29 @@ $existingAsk = @()
 if ($permissions.Contains("ask") -and $permissions["ask"]) {
     $existingAsk = @($permissions["ask"])
 }
+$newlyAddedRules = @()
 foreach ($rule in $deleteAskRules) {
     if ($existingAsk -notcontains $rule) {
         $existingAsk += $rule
+        $newlyAddedRules += $rule
     }
 }
-$permissions["ask"] = $existingAsk
-$settings["permissions"] = $permissions
 
-$json = $settings | ConvertTo-Json -Depth 10
-[System.IO.File]::WriteAllText($settingsPath, $json, [System.Text.UTF8Encoding]::new($false))
+if ($newlyAddedRules.Count -gt 0 -or $languageChanged) {
+    $permissions["ask"] = $existingAsk
+    $settings["permissions"] = $permissions
 
-Write-Host "  -> 削除・commit・push・rebase・merge等の実行前に確認を求める設定を追加しました。"
+    $json = $settings | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($settingsPath, $json, [System.Text.UTF8Encoding]::new($false))
+
+    if ($newlyAddedRules.Count -gt 0) {
+        Write-Host "  -> 削除・commit・push・rebase・merge等の実行前に確認を求める設定を追加しました。"
+    } else {
+        Write-Host "  -> 確認ルールに変更はありません(言語設定の変更のみ反映しました)。"
+    }
+} else {
+    Write-Host "  -> 削除・commit・push・rebase・merge等の確認ルールは既に設定済みです。スキップします。"
+}
 Write-Host ""
 Write-Host "設定ファイルの場所: $settingsPath"
 
@@ -307,6 +323,23 @@ $destructiveOpsBlock = @'
 ユーザーが明確に「はい」「OK」「実行して」等の同意を示すまで、実行してはいけない。
 '@
 
+$autoModeDeferralBlock = @'
+## AutoSpec Autoモードでの確認保留・後回しルール
+
+AutoSpec(.autospec_mode が auto または auto_until_complete)で作業中、
+PreToolUse hookの判定結果が「確認が必要なため保留(deny)」だった場合、
+その場で立ち止まってユーザーに確認を求めてはいけない。
+
+- 保留された操作はいったん諦め、実行結果のログファイル
+  (autospec_action_log.md)に記録されていることを確認したうえで、他に
+  進められる独立したタスクがあれば先にそちらを進めること
+- 保留にした項目は覚えておき、進められる作業がすべて終わった時点で、
+  保留リストをまとめてユーザーに報告し、確認を求めること
+- ログの「区分」が「禁止操作(バージョン管理)」の項目は常にスキップ対象
+  であり実行不可能。「要確認(保留)」の項目はユーザーの許可が得られれば
+  実行できる可能性がある操作なので、報告時にこの2つを区別して伝えること
+'@
+
 $existingMd = ""
 if (Test-Path $claudeMdPath) {
     $existingMd = Get-Content -Path $claudeMdPath -Raw -Encoding UTF8
@@ -345,6 +378,31 @@ if ($blocksToAdd.Count -gt 0) {
 
 Write-Host ""
 Write-Host "CLAUDE.mdの場所: $claudeMdPath"
+
+# --- プロジェクトローカルCLAUDE.md(配置フォルダ直下)への追記 ---
+# Autoモードの確認保留・後回しルールは、.autospec_modeやAutoモード用hook設定
+# (どちらもプロジェクトごとに切り替わる)と足並みを揃えるため、あなたの
+# アカウント全体に効くグローバルCLAUDE.mdではなく、こちらに書き込む。
+$projectClaudeMdPath = Join-Path $PSScriptRoot "CLAUDE.md"
+$existingProjectMd = ""
+if (Test-Path $projectClaudeMdPath) {
+    $existingProjectMd = Get-Content -Path $projectClaudeMdPath -Raw -Encoding UTF8
+    if (-not $existingProjectMd) { $existingProjectMd = "" }
+}
+
+if ($existingProjectMd.Contains("## AutoSpec Autoモードでの確認保留・後回しルール")) {
+    Write-Host "  -> (このプロジェクト) AutoSpec Autoモードでの確認保留・後回しルールは既に含まれています。スキップします。"
+} else {
+    $newProjectContent = $existingProjectMd
+    if ($newProjectContent.Trim().Length -eq 0) {
+        $newProjectContent = $autoModeDeferralBlock
+    } else {
+        $newProjectContent = $newProjectContent.TrimEnd() + "`r`n`r`n" + $autoModeDeferralBlock
+    }
+    [System.IO.File]::WriteAllText($projectClaudeMdPath, $newProjectContent, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "  -> (このプロジェクト) AutoSpec Autoモードでの確認保留・後回しルールを追加しました。"
+}
+Write-Host "  -> このプロジェクトのCLAUDE.mdの場所: $projectClaudeMdPath"
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green

@@ -66,14 +66,16 @@ $toolInput = $payload.tool_input
 
 function Add-ActionLog {
     param(
+        [string]$Category,
         [string]$Summary,
         [string]$Reason
     )
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    $entry = "`r`n## $timestamp`r`n- Tool: $toolName`r`n- 内容: $Summary`r`n- 判定: 禁止操作のためスキップ(deny)`r`n- 理由: $Reason`r`n"
+    $entry = "`r`n## $timestamp`r`n- Tool: $toolName`r`n- 区分: $Category`r`n- 内容: $Summary`r`n- 判定: スキップ(deny)`r`n- 理由: $Reason`r`n"
     if (-not (Test-Path $logPath)) {
-        $header = "# AutoSpec 自動スキップログ`r`n`r`nAutoモード中にバージョン管理保護のためスキップされた操作の記録です。`r`n"
-        [System.IO.File]::WriteAllText($logPath, $header, [System.Text.UTF8Encoding]::new($false))
+        $header = "# AutoSpec 自動スキップログ`r`n`r`nAutoモード中に自動でスキップされた操作の記録です。`r`n" +
+            "区分が「要確認(保留)」の項目は、後でユーザーへの確認が必要です。`r`n"
+        [System.IO.File]::WriteAllText($logPath, $header, [System.Text.UTF8Encoding]::new($true))
     }
     Add-Content -Path $logPath -Value $entry -Encoding UTF8
 }
@@ -122,8 +124,8 @@ if ($toolName -eq "Bash") {
         $isForbidden = $true
     }
     if ($isForbidden) {
-        Add-ActionLog -Summary "Bashコマンド: $command" -Reason "バージョン管理の状態を変更する操作は常に禁止されています(CLAUDE.md参照)"
-        Write-Decision -Decision "deny" -Reason "バージョン管理(git/svn)の状態を変更する操作のため自動実行をスキップしました。必要であればユーザーに手動実行を依頼してください。"
+        Add-ActionLog -Category "禁止操作(バージョン管理)" -Summary "Bashコマンド: $command" -Reason "バージョン管理の状態を変更する操作は常に禁止されています(CLAUDE.md参照)"
+        Write-Decision -Decision "deny" -Reason "バージョン管理(git/svn)の状態を変更する操作のため自動実行をスキップしました。この操作は保留とし、他に進められるタスクがあれば先に進めてください。必要であればユーザーに手動実行を依頼してください。"
     }
     # 禁止パターンに該当しないBashコマンドはAutoモードでは自動許可する。
     # (個々のファイルパスのgit管理下判定までは行わない簡略実装。ver0時点の割り切り)
@@ -180,8 +182,11 @@ if ($fileEditTools -contains $toolName) {
         Write-Decision -Decision "allow" -Reason "Autoモード: git管理下のファイルのため自動許可"
     }
 
-    # git管理外かつ新規作成でもない = ユーザー作成ファイルの可能性 → 従来通り確認を求める
-    Write-Decision -Decision $null
+    # git管理外かつ新規作成でもない = ユーザー作成ファイルの可能性。
+    # 無許可では編集・削除しないが、その場で確認を求めて処理を止めるのではなく、
+    # 一旦スキップしてログに記録し、後回しにできるようにする。
+    Add-ActionLog -Category "要確認(保留)" -Summary "${toolName}対象: $filePath" -Reason "git管理外かつこのセッションでの新規作成でもないファイルのため、ユーザーの確認が必要です"
+    Write-Decision -Decision "deny" -Reason "このファイルはgit管理外かつ新規作成でもないため、ユーザーの確認が必要です。この操作は保留とし、autospec_action_log.mdに記録しました。他に進められるタスクがあれば先に進め、最後にまとめてユーザーに確認してください。"
 }
 
 # --- 上記以外のツールは通常フローに委ねる ---
